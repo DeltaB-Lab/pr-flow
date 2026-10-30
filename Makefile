@@ -27,6 +27,12 @@ build:
 	codesign --force --sign - $(APP) 2>/dev/null || true
 	@echo "Built $(APP)"
 
+VERSION := 0.1.0
+
+dist: build
+	ditto -c -k --sequesterRsrc --keepParent $(APP) PRFlow-v$(VERSION).zip
+	@echo "PRFlow-v$(VERSION).zip"
+
 run: build
 	open $(APP)
 

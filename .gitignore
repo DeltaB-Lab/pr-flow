@@ -1,3 +1,4 @@
 .build/
 PRFlow.app/
+PRFlow-*.zip
 .DS_Store
