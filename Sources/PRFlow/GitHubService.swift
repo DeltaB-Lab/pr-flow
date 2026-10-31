@@ -126,6 +126,21 @@ final class GitHubService: Sendable {
         _ = try await run(args)
     }
 
+    func fetchMyIssues() async throws -> [IssueItem] {
+        let data = try await run([
+            "search", "issues",
+            "--assignee=@me",
+            "--state", "open",
+            "--limit", "100",
+            "--json", "number,title,url,repository,updatedAt,state,labels",
+        ])
+        return try JSONDecoder().decode([SearchIssue].self, from: data).map(IssueItem.init)
+    }
+
+    func closeIssue(_ issue: IssueItem) async throws {
+        _ = try await run(["issue", "close", issue.url.absoluteString])
+    }
+
     func close(_ pr: PullRequest) async throws {
         _ = try await run(["pr", "close", pr.url.absoluteString])
     }

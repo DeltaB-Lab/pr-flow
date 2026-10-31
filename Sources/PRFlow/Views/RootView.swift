@@ -3,14 +3,18 @@ import SwiftUI
 
 struct RootView: View {
     @ObservedObject var store: PRStore
+    @Namespace private var modeNs
+
+    private var accent: Color { store.mode == .issues ? .blue : .white }
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            modeToggle
             if store.errorMessage != nil {
                 errorBanner
             }
-            if !store.repos.isEmpty {
+            if !currentTabs.isEmpty {
                 tabBar
                 Divider().opacity(0.4)
             }
@@ -19,6 +23,7 @@ struct RootView: View {
             footer
         }
         .frame(width: 400, height: 540)
+        .background(store.mode == .issues ? Color.blue.opacity(0.14) : Color.clear)
     }
 
     // MARK: - Header
@@ -56,6 +61,46 @@ struct RootView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    // MARK: - Mode toggle
+
+    private var modeToggle: some View {
+        HStack(spacing: 0) {
+            ForEach(ViewMode.allCases, id: \.self) { mode in
+                Button {
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
+                        store.mode = mode
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(mode.title)
+                            .font(.system(size: 11, weight: store.mode == mode ? .semibold : .regular))
+                        Text("\(mode == .prs ? store.prs.count : store.issues.count)")
+                            .font(.system(size: 10, weight: .medium).monospacedDigit())
+                            .foregroundStyle(store.mode == mode ? .primary : .tertiary)
+                    }
+                    .foregroundStyle(store.mode == mode ? .primary : .secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity)
+                    .background {
+                        if store.mode == mode {
+                            Capsule()
+                                .fill(accent.opacity(store.mode == .issues ? 0.30 : 0.22))
+                                .overlay(Capsule().strokeBorder(accent.opacity(0.3), lineWidth: 0.5))
+                                .matchedGeometryEffect(id: "modePill", in: modeNs)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(Capsule().fill(.white.opacity(0.07)))
+        .overlay(Capsule().strokeBorder(.white.opacity(0.10), lineWidth: 0.5))
+        .padding(.horizontal, 90)
+        .padding(.bottom, 6)
     }
 
     private var accountMenu: some View {
@@ -131,16 +176,27 @@ struct RootView: View {
 
     // MARK: - Tabs
 
+    private var currentTabs: [(id: String, name: String, count: Int)] {
+        store.mode == .prs
+            ? store.repos.map { ($0.nameWithOwner, $0.name, $0.prs.count) }
+            : store.issueRepos.map { ($0.nameWithOwner, $0.name, $0.issues.count) }
+    }
+
+    private var selectedTabID: String? {
+        store.mode == .prs ? store.selectedRepo : store.selectedIssueRepo
+    }
+
     private var tabBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(store.repos) { repo in
+                ForEach(currentTabs, id: \.id) { tab in
                     TabButton(
-                        title: repo.name,
-                        count: repo.prs.count,
-                        isSelected: store.selectedRepo == repo.nameWithOwner
+                        title: tab.name,
+                        count: tab.count,
+                        accent: accent,
+                        isSelected: selectedTabID == tab.id
                     ) {
-                        store.selectedRepo = repo.nameWithOwner
+                        store.selectTab(tab.id)
                     }
                 }
             }
@@ -151,13 +207,17 @@ struct RootView: View {
 
     // MARK: - Content
 
+    private var isCurrentEmpty: Bool {
+        store.mode == .prs ? store.prs.isEmpty : store.issues.isEmpty
+    }
+
     @ViewBuilder
     private var content: some View {
-        if store.prs.isEmpty && store.loading {
+        if isCurrentEmpty && store.loading {
             Spacer()
             ProgressView().scaleEffect(0.9)
             Spacer()
-        } else if store.prs.isEmpty {
+        } else if isCurrentEmpty {
             Spacer()
             VStack(spacing: 8) {
                 if let glyph = NSImage(named: "glyph-glass") {
@@ -169,7 +229,7 @@ struct RootView: View {
                         .font(.system(size: 32))
                         .foregroundStyle(.secondary)
                 }
-                Text(store.errorMessage == nil ? "No open pull requests" : "Couldn't load PRs")
+                Text(store.errorMessage == nil ? emptyTitle : "Couldn't load")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                 Button("Retry") { store.refresh() }
@@ -177,7 +237,7 @@ struct RootView: View {
                     .font(.system(size: 12))
             }
             Spacer()
-        } else if let group = store.selectedGroup {
+        } else if store.mode == .prs, let group = store.selectedGroup {
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(group.prs) { pr in
@@ -187,14 +247,39 @@ struct RootView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
             }
+            .transition(listTransition)
+        } else if let group = store.selectedIssueGroup {
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(group.issues) { issue in
+                        IssueRowView(issue: issue, store: store)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            }
+            .transition(listTransition)
         }
+    }
+
+    private var listTransition: AnyTransition {
+        let insertion: Edge = store.mode == .issues ? .trailing : .leading
+        let removal: Edge = store.mode == .issues ? .leading : .trailing
+        return .asymmetric(
+            insertion: .move(edge: insertion).combined(with: .opacity),
+            removal: .move(edge: removal).combined(with: .opacity)
+        )
+    }
+
+    private var emptyTitle: String {
+        store.mode == .prs ? "No open pull requests" : "No open issues"
     }
 
     // MARK: - Footer
 
     private var footer: some View {
         HStack {
-            Text("\(store.totalCount) open PR\(store.totalCount == 1 ? "" : "s")")
+            Text("\(store.totalCount) open \(store.mode == .prs ? "PR" : "issue")\(store.totalCount == 1 ? "" : "s")")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
@@ -219,6 +304,7 @@ struct RootView: View {
 private struct TabButton: View {
     let title: String
     let count: Int
+    let accent: Color
     let isSelected: Bool
     let action: () -> Void
 
@@ -234,16 +320,16 @@ private struct TabButton: View {
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
                     .background(
-                        Capsule().fill(isSelected ? .white.opacity(0.28) : .white.opacity(0.12))
+                        Capsule().fill(isSelected ? accent.opacity(0.30) : .white.opacity(0.12))
                     )
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(
-                Capsule().fill(.white.opacity(isSelected ? 0.20 : 0.07))
+                Capsule().fill(isSelected ? accent.opacity(0.22) : .white.opacity(0.07))
             )
             .overlay(
-                Capsule().strokeBorder(.white.opacity(isSelected ? 0.28 : 0.10), lineWidth: 0.5)
+                Capsule().strokeBorder(accent.opacity(isSelected ? 0.30 : 0.10), lineWidth: 0.5)
             )
         }
         .buttonStyle(.plain)

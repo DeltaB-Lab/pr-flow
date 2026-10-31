@@ -77,7 +77,7 @@ struct PullRequest: Identifiable, Hashable {
         mergeStateStatus = detail?.mergeStateStatus ?? "UNKNOWN"
     }
 
-    private static func parseDate(_ string: String) -> Date {
+    static func parseDate(_ string: String) -> Date {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: string) ?? .distantPast
@@ -115,6 +115,58 @@ struct PullRequest: Identifiable, Hashable {
         }
         return hasPending ? .pending : .passing
     }
+}
+
+struct SearchIssue: Decodable {
+    struct Label: Decodable, Hashable {
+        let name: String
+        let color: String?
+    }
+
+    let number: Int
+    let title: String
+    let url: String
+    let updatedAt: String
+    let state: String
+    let repository: SearchPR.Repo
+    let labels: [Label]
+}
+
+struct IssueItem: Identifiable, Hashable {
+    let number: Int
+    let title: String
+    let url: URL
+    let repoName: String
+    let repoFullName: String
+    let updatedAt: Date
+    let labels: [SearchIssue.Label]
+
+    var id: String { "\(repoFullName)#\(number)" }
+
+    init(search: SearchIssue) {
+        number = search.number
+        title = search.title
+        url = URL(string: search.url)!
+        repoName = search.repository.name
+        repoFullName = search.repository.nameWithOwner
+        updatedAt = PullRequest.parseDate(search.updatedAt)
+        labels = search.labels
+    }
+}
+
+struct IssueGroup: Identifiable {
+    let name: String
+    let nameWithOwner: String
+    let issues: [IssueItem]
+
+    var id: String { nameWithOwner }
+    var latestUpdate: Date { issues.map(\.updatedAt).max() ?? .distantPast }
+}
+
+enum ViewMode: String, CaseIterable {
+    case prs, issues
+
+    var title: String { self == .prs ? "PRs" : "Issues" }
 }
 
 struct RepoGroup: Identifiable {

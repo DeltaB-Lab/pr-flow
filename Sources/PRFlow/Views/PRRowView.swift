@@ -163,7 +163,7 @@ struct PRRowView: View {
     }
 }
 
-private struct Badge: View {
+struct Badge: View {
     let text: String
     let icon: String
     let color: Color

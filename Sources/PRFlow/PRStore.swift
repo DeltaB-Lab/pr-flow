@@ -4,6 +4,10 @@ import Foundation
 final class PRStore: ObservableObject {
     @Published private(set) var prs: [PullRequest] = []
     @Published private(set) var repos: [RepoGroup] = []
+    @Published private(set) var issues: [IssueItem] = []
+    @Published private(set) var issueRepos: [IssueGroup] = []
+    @Published var mode: ViewMode = .prs
+    @Published var selectedIssueRepo: String?
     @Published private(set) var loading = false
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var username = ""
@@ -17,8 +21,17 @@ final class PRStore: ObservableObject {
     private var refreshTimer: Timer?
     private var refreshTask: Task<Void, Never>?
 
-    var totalCount: Int { prs.count }
+    var totalCount: Int { mode == .prs ? prs.count : issues.count }
     var selectedGroup: RepoGroup? { repos.first { $0.nameWithOwner == selectedRepo } }
+    var selectedIssueGroup: IssueGroup? { issueRepos.first { $0.nameWithOwner == selectedIssueRepo } }
+
+    func selectTab(_ id: String) {
+        if mode == .prs {
+            selectedRepo = id
+        } else {
+            selectedIssueRepo = id
+        }
+    }
 
     func start() {
         refresh()
@@ -64,11 +77,15 @@ final class PRStore: ObservableObject {
     }
 
     func merge(_ pr: PullRequest, method: MergeMethod, auto: Bool = false) {
-        runAction(for: pr) { try await self.github.merge(pr, method: method, auto: auto) }
+        runAction(id: pr.id) { try await self.github.merge(pr, method: method, auto: auto) }
     }
 
     func close(_ pr: PullRequest) {
-        runAction(for: pr) { try await self.github.close(pr) }
+        runAction(id: pr.id) { try await self.github.close(pr) }
+    }
+
+    func close(_ issue: IssueItem) {
+        runAction(id: issue.id) { try await self.github.closeIssue(issue) }
     }
 
     // MARK: - Private
@@ -80,9 +97,12 @@ final class PRStore: ObservableObject {
             refreshTask = nil
         }
         do {
-            let fetched = try await github.fetchMyPRs()
-            prs = fetched.sorted { $0.updatedAt > $1.updatedAt }
-            repos = Dictionary(grouping: fetched) { $0.repoFullName }
+            async let prFetch = github.fetchMyPRs()
+            async let issueFetch = github.fetchMyIssues()
+            let (fetchedPRs, fetchedIssues) = try await (prFetch, issueFetch)
+
+            prs = fetchedPRs.sorted { $0.updatedAt > $1.updatedAt }
+            repos = Dictionary(grouping: fetchedPRs) { $0.repoFullName }
                 .map { key, value in
                     RepoGroup(
                         name: value.first?.repoName ?? key,
@@ -94,6 +114,21 @@ final class PRStore: ObservableObject {
             if selectedRepo == nil || !repos.contains(where: { $0.nameWithOwner == selectedRepo }) {
                 selectedRepo = repos.first?.nameWithOwner
             }
+
+            issues = fetchedIssues.sorted { $0.updatedAt > $1.updatedAt }
+            issueRepos = Dictionary(grouping: fetchedIssues) { $0.repoFullName }
+                .map { key, value in
+                    IssueGroup(
+                        name: value.first?.repoName ?? key,
+                        nameWithOwner: key,
+                        issues: value.sorted { $0.updatedAt > $1.updatedAt }
+                    )
+                }
+                .sorted { $0.latestUpdate > $1.latestUpdate }
+            if selectedIssueRepo == nil || !issueRepos.contains(where: { $0.nameWithOwner == selectedIssueRepo }) {
+                selectedIssueRepo = issueRepos.first?.nameWithOwner
+            }
+
             lastUpdated = Date()
             errorMessage = nil
         } catch {
@@ -101,10 +136,10 @@ final class PRStore: ObservableObject {
         }
     }
 
-    private func runAction(for pr: PullRequest, _ action: @escaping () async throws -> Void) {
+    private func runAction(id: String, _ action: @escaping () async throws -> Void) {
         Task {
-            busyPRs.insert(pr.id)
-            defer { busyPRs.remove(pr.id) }
+            busyPRs.insert(id)
+            defer { busyPRs.remove(id) }
             do {
                 try await action()
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
